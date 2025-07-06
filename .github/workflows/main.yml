@@ -1,20 +1,74 @@
-name: macOS
-on: 
+name: 'Deploy macOS VM with GUI (VNC)'
+
+on:
   workflow_dispatch:
-defaults:
-  run:
-    shell: bash
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-    - uses: actions/checkout@v2
-    - name: Setting the Environment Up.
-      env:
-        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-      run: source setup.sh "Alone215" "Alone215" "$NGROK_AUTH_TOKEN"
-    - name: ngrok is now listening to VNC connections on...
-      run: curl --silent http://127.0.0.1:4040/api/tunnels | jq '.tunnels[0].public_url'
-    - name: Setup tmate Session
-      uses: mxschmitt/action-tmate@v2
+      - name: Setup User and Enable Remote Management (VNC/Screen Sharing)
+        env:
+          # Use the SSH_PASSWORD secret you created in the repository settings
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          # Create a new user account for the runner
+          echo "Creating user account..."
+          sudo dscl . -create /Users/runner
+          sudo dscl . -create /Users/runner UserShell /bin/bash
+          sudo dscl . -create /Users/runner RealName "Runner"
+          sudo dscl . -create /Users/runner UniqueID 1001
+          sudo dscl . -create /Users/runner PrimaryGroupID 80
+          sudo dscl . -create /Users/runner NFSHomeDirectory /Users/runner
+          
+          # Set the password for the new user
+          sudo dscl . -passwd /Users/runner "$SSH_PASSWORD"
+          
+          # Add the new user to the admin group
+          sudo dscl . -append /Groups/admin GroupMembership runner
+          
+          # Enable and configure Apple Remote Desktop (Screen Sharing/VNC)
+          echo "Enabling VNC service..."
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users runner -privs -all -restart -agent -menu
+          
+          # Also enable SSH for backup access/troubleshooting
+          sudo systemsetup -setremotelogin on
+
+      - name: Install and Run ngrok to Tunnel VNC and SSH
+        env:
+          # Use the NGROK_TOKEN secret you created in the repository settings
+          NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
+        run: |
+          echo "Installing and running ngrok..."
+          brew install ngrok
+          ngrok authtoken $NGROK_TOKEN
+          
+          # Create a tunnel for VNC (port 5900) and run it in the background
+          echo "Starting VNC tunnel..."
+          ngrok tcp 5900 &
+          
+          # Create a tunnel for SSH (port 22) and run it in the background
+          echo "Starting SSH tunnel (for backup)..."
+          ngrok tcp 22 &
+
+      - name: Keep VM Alive and Display Connection Info
+        run: |
+          echo "VM is getting ready. Please wait a minute for ngrok to provide the addresses."
+          sleep 10 # Wait for ngrok to initialize
+          
+          # Fetch and display the public VNC and SSH addresses from the ngrok API
+          curl -s http://localhost:4040/api/tunnels > tunnels.json
+          VNC_URL=$(jq -r '.tunnels[] | select(.proto=="tcp" and .config.addr=="localhost:5900") | .public_url' tunnels.json | sed 's/tcp:\/\///')
+          SSH_URL=$(jq -r '.tunnels[] | select(.proto=="tcp" and .config.addr=="localhost:22") | .public_url' tunnels.json | sed 's/tcp:\/\///')
+
+          echo "--------------------------------------------------------------------"
+          echo "VNC (GUI) ADDRESS: $VNC_URL"
+          echo "USER: runner"
+          echo "PASSWORD: [The password you set in SSH_PASSWORD secret]"
+          echo "--------------------------------------------------------------------"
+          echo "SSH (CLI) ADDRESS: ssh runner@$SSH_URL"
+          echo "--------------------------------------------------------------------"
+          
+          # Keep the job running for 6 hours
+          echo "VM will stay alive for 6 hours. Press Ctrl+C in the VNC/SSH session to disconnect."
+          sleep 21600

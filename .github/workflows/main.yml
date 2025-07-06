@@ -12,8 +12,7 @@ jobs:
           # This uses the SSH_PASSWORD secret from your repository settings
           VNC_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         run: |
-          # Create a new user named 'vncuser'
-          # This avoids permissions issues with the default 'runner' account
+          # Create a new user named 'vncuser' to avoid permissions issues
           echo "Creating a new user 'vncuser'..."
           sudo dscl . -create /Users/vncuser
           sudo dscl . -create /Users/vncuser UserShell /bin/bash
@@ -26,9 +25,14 @@ jobs:
           echo "Setting password for 'vncuser'..."
           sudo dscl . -passwd /Users/vncuser "$VNC_PASSWORD"
           
-          # Add the new user to the admin group to grant permissions
+          # Add the new user to the admin group
           echo "Adding 'vncuser' to the admin group..."
           sudo dscl . -append /Groups/admin GroupMembership vncuser
+          
+          # --- THE CRITICAL FIX IS HERE ---
+          # Enable Legacy VNC mode for compatibility with RealVNC and other clients
+          echo "Enabling Legacy VNC mode..."
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement.plist VNCLegacyConnectionsEnabled -bool YES
           
           # Enable and configure Apple Remote Desktop (Screen Sharing/VNC)
           echo "Enabling VNC service for 'vncuser'..."

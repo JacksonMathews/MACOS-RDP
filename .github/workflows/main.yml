@@ -1,4 +1,4 @@
-name: 'Deploy macOS VM with GUI (VNC) - Fixed'
+name: 'Deploy macOS VM with GUI (VNC) - Final Fix'
 
 on:
   workflow_dispatch:
@@ -7,55 +7,54 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Set User Password and Enable Remote Management (VNC/Screen Sharing)
+      - name: Create New User and Enable VNC
         env:
-          # This uses the SSH_PASSWORD secret you created in your repository settings
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          # This uses the SSH_PASSWORD secret from your repository settings
+          VNC_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         run: |
-          echo "Setting password for existing user 'runner'..."
-          # Set the password for the existing 'runner' user
-          sudo dscl . -passwd /Users/runner "$SSH_PASSWORD"
+          # Create a new user named 'vncuser'
+          # This avoids permissions issues with the default 'runner' account
+          echo "Creating a new user 'vncuser'..."
+          sudo dscl . -create /Users/vncuser
+          sudo dscl . -create /Users/vncuser UserShell /bin/bash
+          sudo dscl . -create /Users/vncuser RealName "VNC User"
+          sudo dscl . -create /Users/vncuser UniqueID 1001
+          sudo dscl . -create /Users/vncuser PrimaryGroupID 80
+          sudo dscl . -create /Users/vncuser NFSHomeDirectory /Users/vncuser
           
-          echo "Enabling VNC service for user 'runner'..."
-          # Enable and configure Apple Remote Desktop (Screen Sharing/VNC) for the 'runner' user
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users runner -privs -all -restart -agent -menu
+          # Set the password for the new 'vncuser'
+          echo "Setting password for 'vncuser'..."
+          sudo dscl . -passwd /Users/vncuser "$VNC_PASSWORD"
           
-          # Also enable SSH for backup access/troubleshooting
-          sudo systemsetup -setremotelogin on
+          # Add the new user to the admin group to grant permissions
+          echo "Adding 'vncuser' to the admin group..."
+          sudo dscl . -append /Groups/admin GroupMembership vncuser
+          
+          # Enable and configure Apple Remote Desktop (Screen Sharing/VNC)
+          echo "Enabling VNC service for 'vncuser'..."
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users vncuser -privs -all -restart -agent -menu
 
-      - name: Install and Run ngrok to Tunnel VNC and SSH
+      - name: Install and Run ngrok
         env:
-          # This uses the NGROK_TOKEN secret you created in your repository settings
           NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
         run: |
           echo "Installing and running ngrok..."
           brew install --cask ngrok
           ngrok authtoken $NGROK_TOKEN
-          
-          # Create a tunnel for VNC (port 5900) and run it in the background
-          echo "Starting VNC tunnel..."
           ngrok tcp 5900 &
-          
-          # Create a tunnel for SSH (port 22) and run it in the background
-          echo "Starting SSH tunnel (for backup)..."
-          ngrok tcp 22 &
 
-      - name: Keep VM Alive and Display Connection Info
+      - name: Display Connection Info and Keep Alive
         run: |
-          echo "VM is getting ready. Please wait a minute for ngrok to provide the addresses."
-          sleep 10 # Wait for ngrok to initialize
+          echo "VM is getting ready. Please wait a minute for ngrok to provide the VNC address."
+          sleep 10
           
-          # Fetch and display the public VNC and SSH addresses from the ngrok API
-          curl -s http://localhost:4040/api/tunnels > tunnels.json
-          VNC_URL=$(jq -r '.tunnels[] | select(.proto=="tcp" and .config.addr=="localhost:5900") | .public_url' tunnels.json | sed 's/tcp:\/\///')
-          SSH_URL=$(jq -r '.tunnels[] | select(.proto=="tcp" and .config.addr=="localhost:22") | .public_url' tunnels.json | sed 's/tcp:\/\///')
-
+          # Fetch and display the public VNC address from the ngrok API
+          VNC_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' | sed 's/tcp:\/\///')
+          
           echo "--------------------------------------------------------------------"
           echo "✅ VNC (GUI) ADDRESS: $VNC_URL"
-          echo "   USER: runner"
+          echo "   USER: vncuser"
           echo "   PASSWORD: [The password you set in SSH_PASSWORD secret]"
-          echo "--------------------------------------------------------------------"
-          echo "SSH (CLI) ADDRESS: ssh runner@$SSH_URL"
           echo "--------------------------------------------------------------------"
           
           # Keep the job running for 6 hours
